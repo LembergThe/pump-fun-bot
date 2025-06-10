@@ -5,6 +5,7 @@ Solana client abstraction for blockchain operations.
 import asyncio
 import json
 from typing import Any, Optional
+from cachetools import TTLCache, cachedmethod
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
@@ -16,6 +17,7 @@ from solders.instruction import Instruction
 from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
+from solders.solders import RECENT_BLOCKHASHES
 from solders.transaction import VersionedTransaction
 from solders.system_program import TransferParams, transfer as system_transfer
 
@@ -36,12 +38,13 @@ class SolanaClient:
         self.rpc_endpoint = rpc_endpoint
         self._client = AsyncClient(self.rpc_endpoint)
 
-        self.zero_slot_endpoint = zero_slot_endpoint
-        self._0slot_send_client = AsyncClient(self.zero_slot_endpoint)
+        self._0slot_endpoint = zero_slot_endpoint
+        self._0slot_send_client = AsyncClient(zero_slot_endpoint)
 
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
+        self.RECENT_BLOCKHASH_CACHE = TTLCache(maxsize=1, ttl=90)
 
     async def start_blockhash_updater(self, interval: float = 5.0):
         """Start background task to update recent blockhash."""
@@ -55,12 +58,12 @@ class SolanaClient:
             finally:
                 await asyncio.sleep(interval)
 
+    @cachedmethod(cache=lambda self: self.RECENT_BLOCKHASH_CACHE)
     async def get_cached_blockhash(self) -> Hash:
         """Return the most recently cached blockhash."""
         async with self._blockhash_lock:
-            if self._cached_blockhash is None:
-                raise RuntimeError("No cached blockhash available yet")
-            return self._cached_blockhash
+            logger.info(f"Blockhash invalidated after 90 sec. Updating blockhash...")
+            return await self.get_latest_blockhash()
 
     async def get_client(self) -> AsyncClient:
         """Get or create the AsyncClient instance.
@@ -268,3 +271,43 @@ class SolanaClient:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode RPC response: {e!s}", exc_info=True)
             return None
+
+    # ... (0slot keep-alive methods remain the same as your version) ...
+    # async def _perform_oslot_keep_alive(self):
+    #     if not self._0slot_send_client or not self._0slot_endpoint:
+    #         logger.error("0slot client or base URL not configured. Cannot start keep-alive.")
+    #         self._keep_alive_running = False
+    #         return
+    #     logger.info(f"0slot Keep-Alive task started for {self._0slot_endpoint}. Interval: {OSLOT_KEEPALIVE_INTERVAL_SECONDS}s.")
+    #     initial_ping_done = False
+    #     while self._keep_alive_running:
+    #         try:
+    #             connected = await self._0slot_send_client.is_connected()
+    #             if connected:
+    #                 if not initial_ping_done:
+    #                     logger.info(f"0slot Keep-Alive: Initial ping to {self._0slot_endpoint} successful.")
+    #                     initial_ping_done = True
+    #             else:
+    #                 logger.warning(f"0slot Keep-Alive: Ping to {self._0slot_endpoint} failed (is_connected returned False).")
+    #             await asyncio.sleep(OSLOT_KEEPALIVE_INTERVAL_SECONDS)
+    #         except asyncio.CancelledError:
+    #             logger.info("0slot Keep-Alive task has been cancelled.")
+    #             break
+    #         except SolanaRpcException as e:
+    #             logger.error(f"0slot Keep-Alive: RPC Exception during ping to {self._0slot_endpoint}: {e!r}")
+    #             await asyncio.sleep(OSLOT_KEEPALIVE_INTERVAL_SECONDS / 2)
+    #         except Exception as e:
+    #             logger.error(f"0slot Keep-Alive: Unexpected error during ping to {self._0slot_endpoint}: {e!r}", exc_info=self.debug_mode)
+    #             await asyncio.sleep(OSLOT_KEEPALIVE_INTERVAL_SECONDS / 2)
+    #     logger.info(f"0slot Keep-Alive task for {self._0slot_endpoint} has stopped.")
+    #
+    # async def start_oslot_keep_alive(self):
+    #     if not self._oslot_keep_alive_task or self._oslot_keep_alive_task.done():
+    #         if not self._keep_alive_running: # Ensure flag is reset if task was done
+    #             self._keep_alive_running = True
+    #         self._oslot_keep_alive_task = asyncio.create_task(self._perform_oslot_keep_alive())
+    #         await asyncio.sleep(0.1)
+    #     else:
+    #         logger.debug("0slot Keep-Alive task is already running or was previously started.")
+
+

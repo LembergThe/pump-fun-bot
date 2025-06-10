@@ -184,6 +184,8 @@ def print_config_summary(config: dict) -> None:
 
     print(f"transaction_sender settings:")
     print(f"  - Zero slot RPC: {config.get('zero_slot_endpoint')}")
+    print(f"  - Zero slot tip receiver: {config.get('tip_receiver_address')}")
+    print(f"  - Zero slot tip lamports: {config.get('tip_lamports')}")
     print(f"  - PRIMARY RPC: {config.get('rpc_endpoint')}")
     print(f"  - WS RPC: {config.get('wss_endpoint')}")
     print("Filters:")

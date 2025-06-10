@@ -12,6 +12,9 @@ private_key: "${SOLANA_PRIVATE_KEY}"
 enabled: true # You can turn off the bot w/o removing its config
 separate_process: true
 
+tip_receiver_address: "Cix2bHfqPcKcM233mzxbLk14kSggUUiz2A87fJtGivXr" # Optional: Address to send a 0slot tip to.
+tip_lamports: 1000000
+
 # Geyser configuration (fastest method for getting updates)
 geyser:
   endpoint: "${GEYSER_ENDPOINT}"    # e.g., "newyork.omeganetworks.io:10000"

@@ -41,7 +41,8 @@ class TokenBuyer(Trader):
         token_amount: int,
         slippage: float = 0.01,
         max_retries: int = 5,
-        fixed_fee: int = 3_000_000,
+        tip_lamports: int = 3_000_000,
+        tip_receiver: str = None,
     ):
         """Initialize token buyer.
 
@@ -62,7 +63,8 @@ class TokenBuyer(Trader):
         self.token_amount = token_amount
         self.slippage = slippage
         self.max_retries = max_retries
-        self.fixed_fee = fixed_fee
+        self.tip_receiver = tip_receiver
+        self.tip_lamports = tip_lamports
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute buy operation.
@@ -103,7 +105,7 @@ class TokenBuyer(Trader):
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,
-                    amount=token_amount,
+                    amount=self.token_amount,
                     price=1,
                 )
             else:
@@ -182,7 +184,10 @@ class TokenBuyer(Trader):
                 # priority_fee=await self.priority_fee_manager.calculate_priority_fee(
                 #     self._get_relevant_accounts(token_info)
                 # ),
-                priority_fee=3_000_000
+                priority_fee=3_000_000,
+                compute_unit_limit=70_000,
+                tip_receiver=Pubkey.from_string(self.tip_receiver),
+                tip_lamports=self.tip_lamports,
             )
         except Exception as e:
             logger.error(f"Buy transaction failed: {e!s}")

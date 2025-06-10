@@ -46,6 +46,8 @@ async def start_bot(config_path: str):
         zero_slot_endpoint=cfg["zero_slot_endpoint"],
         private_key=cfg["private_key"],
 
+        tip_receiver=cfg["tip_receiver_address"],
+        tip_lamports=cfg["tip_lamports"],
         # Trade parameters
         buy_amount=cfg["trade"]["buy_amount"],
         token_amount=cfg["trade"]["token_amount"],

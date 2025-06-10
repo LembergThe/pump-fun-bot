@@ -36,6 +36,8 @@ class TokenSeller(Trader):
         wallet: Wallet,
         curve_manager: BondingCurveManager,
         priority_fee_manager: PriorityFeeManager,
+        tip_lamports: int,
+        tip_receiver: str,
         token_balance: int,
         slippage: float = 0.25,
         max_retries: int = 5,
@@ -56,6 +58,8 @@ class TokenSeller(Trader):
         self.slippage = slippage
         self.max_retries = max_retries
         self.token_balance = token_balance
+        self.tip_lamports = tip_lamports
+        self.tip_receiver = tip_receiver
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute sell operation.
@@ -167,7 +171,9 @@ class TokenSeller(Trader):
                 #     self._get_relevant_accounts(token_info)
                 # ),
                 priority_fee=3_000_000,
-                compute_unit_limit=75_000
+                compute_unit_limit=180_000,
+                tip_receiver=Pubkey.from_string(self.tip_receiver),
+                tip_lamports=self.tip_lamports,
             )
         except Exception as e:
             logger.error(f"Sell transaction failed: {e!s}")

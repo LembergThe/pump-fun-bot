@@ -48,7 +48,11 @@ class PumpTrader:
         token_amount: int,
         buy_slippage: float,
         sell_slippage: float,
+
+        tip_lamports: int,
+        tip_receiver: str,
         listener_type: str = "logs",
+
         geyser_endpoint: str | None = None,
         geyser_api_token: str | None = None,
         geyser_auth_type: str = "x-token",
@@ -135,6 +139,8 @@ class PumpTrader:
             token_amount=token_amount,
             slippage=buy_slippage,
             max_retries=max_retries,
+            tip_lamports=tip_lamports,
+            tip_receiver=tip_receiver,
         )
         self.seller = TokenSeller(
             client=self.solana_client,
@@ -144,8 +150,10 @@ class PumpTrader:
             slippage=sell_slippage,
             max_retries=max_retries,
             token_balance=token_amount,
+            tip_lamports=tip_lamports,
+            tip_receiver=tip_receiver,
         )
-        
+
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()
         if listener_type == "geyser":
@@ -206,12 +214,24 @@ class PumpTrader:
         logger.info(f"YOLO mode: {self.yolo_mode}")
         logger.info(f"Max token age: {self.max_token_age} seconds")
 
+        # Starting RPC warmup procedured
+        bot_name = "PumpFunTraderBot"
+
+        logger.info(f"Background services for SolanaClient ({bot_name}) started.")
+
         try:
             health_resp = await self.solana_client.get_health()
-            if not health_resp:
-                logger.warning(f"RPC warm-up failed")
+            if health_resp:
+                logger.info(f"RPC healthcheck successful (getHealth passed: {health_resp})")
             else:
-                logger.info(f"RPC warm-up successful (getHealth passed: {health_resp})")
+                logger.warning(f"SolanaClient healthcheck failed for {bot_name}, proceeding.")
+
+            if not await self.solana_client.get_cached_blockhash():
+                logger.warning(f"SolanaClient warm-up failed for {bot_name}, proceeding.")
+            logger.info(f"Starting background services for SolanaClient ({bot_name})...")
+            # await self.solana_client.start_blockhash_updater()
+            # await self.solana_client.start_oslot_keep_alive()
+
         except Exception as e:
             logger.warning(f"RPC warm-up failed: {e!s}")
 

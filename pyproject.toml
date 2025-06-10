@@ -21,7 +21,8 @@ dependencies = [
     "pyyaml>=6.0.2",
     "uvloop>=0.21.0",
     "numpy",
-    "requests"
+    "requests",
+    "cachetools>=6.0.0",
 ]
 
 [project.optional-dependencies]
