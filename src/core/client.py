@@ -4,7 +4,7 @@ Solana client abstraction for blockchain operations.
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
@@ -16,7 +16,8 @@ from solders.instruction import Instruction
 from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
-from solders.transaction import Transaction
+from solders.transaction import VersionedTransaction
+from solders.system_program import TransferParams, transfer as system_transfer
 
 from utils.logger import get_logger
 
@@ -26,14 +27,18 @@ logger = get_logger(__name__)
 class SolanaClient:
     """Abstraction for Solana RPC client operations."""
 
-    def __init__(self, rpc_endpoint: str):
+    def __init__(self, rpc_endpoint: str, zero_slot_endpoint: str) -> None:
         """Initialize Solana client with RPC endpoint.
 
         Args:
             rpc_endpoint: URL of the Solana RPC endpoint
         """
         self.rpc_endpoint = rpc_endpoint
-        self._client = None
+        self._client = AsyncClient(self.rpc_endpoint)
+
+        self.zero_slot_endpoint = zero_slot_endpoint
+        self._0slot_send_client = AsyncClient(self.zero_slot_endpoint)
+
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
@@ -141,6 +146,9 @@ class SolanaClient:
         skip_preflight: bool = True,
         max_retries: int = 3,
         priority_fee: int | None = None,
+        compute_unit_limit: Optional[int] = None,
+        tip_receiver: Pubkey = None,
+        tip_lamports: int = None,
     ) -> str:
         """
         Send a transaction with optional priority fee.
@@ -154,31 +162,53 @@ class SolanaClient:
         Returns:
             Transaction signature.
         """
-        client = await self.get_client()
+        client = self._0slot_send_client
 
         logger.info(
             f"Priority fee in microlamports: {priority_fee if priority_fee else 0}"
         )
 
-        # Add priority fee instructions if applicable
-        if priority_fee is not None:
-            fee_instructions = [
-                set_compute_unit_limit(72_000),  # Default compute unit limit
-                set_compute_unit_price(priority_fee),
-            ]
-            instructions = fee_instructions + instructions
+        final_ordered_instructions = []
+        # 1. Compute Budget Instructions (must be first)
+        if priority_fee and priority_fee > 0:
+            final_ordered_instructions.append(set_compute_unit_price(micro_lamports=priority_fee))
+        if compute_unit_limit and compute_unit_limit > 0:
+            final_ordered_instructions.append(set_compute_unit_limit(units=compute_unit_limit))
+
+        # 2. 0slot Tip Instruction (if applicable, comes after CU, before main instructions)
+
+        if tip_lamports < 1_000_000:  # As per 0slot docs >= 0.001 SOL
+            logger.warning(
+                f"0slot tip lamports is {tip_lamports}, which is less than the recommended 1,000,000 (0.001 SOL).")
+
+        tip_instruction = system_transfer(
+            TransferParams(
+                from_pubkey=signer_keypair.pubkey(),
+                to_pubkey=tip_receiver,
+                lamports=tip_lamports
+            )
+        )
+        final_ordered_instructions.append(tip_instruction)
+        # 3. Main transaction instructions
+        final_ordered_instructions.append(instructions)
 
         recent_blockhash = await self.get_cached_blockhash()
-        message = Message(instructions, signer_keypair.pubkey())
-        transaction = Transaction([signer_keypair], message, recent_blockhash)
+        message = Message.new_with_blockhash(
+            instructions=final_ordered_instructions,
+            payer=signer_keypair.pubkey(),
+            blockhash=recent_blockhash
+        )
+        transaction = VersionedTransaction(message=message, keypairs=[signer_keypair])
 
         for attempt in range(max_retries):
             try:
                 tx_opts = TxOpts(
-                    skip_preflight=skip_preflight, preflight_commitment=Processed
+                    skip_preflight=skip_preflight, preflight_commitment=Processed, max_retries=max_retries
                 )
                 response = await client.send_transaction(transaction, tx_opts)
-                return response.value
+                tx_signature_str = str(response.value)
+                logger.info(f"Transaction sent via 0slot. Signature: {tx_signature_str}")
+                return tx_signature_str
 
             except Exception as e:
                 if attempt == max_retries - 1:
@@ -187,7 +217,7 @@ class SolanaClient:
                     )
                     raise
 
-                wait_time = 2**attempt
+                wait_time = 1.0 + (0.5 * attempt)
                 logger.warning(
                     f"Transaction attempt {attempt + 1} failed: {e!s}, retrying in {wait_time}s"
                 )

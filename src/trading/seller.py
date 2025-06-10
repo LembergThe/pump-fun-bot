@@ -36,6 +36,7 @@ class TokenSeller(Trader):
         wallet: Wallet,
         curve_manager: BondingCurveManager,
         priority_fee_manager: PriorityFeeManager,
+        token_balance: int,
         slippage: float = 0.25,
         max_retries: int = 5,
     ):
@@ -54,6 +55,7 @@ class TokenSeller(Trader):
         self.priority_fee_manager = priority_fee_manager
         self.slippage = slippage
         self.max_retries = max_retries
+        self.token_balance = token_balance
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute sell operation.
@@ -70,56 +72,34 @@ class TokenSeller(Trader):
                 token_info.mint
             )
 
-            # Get token balance
-            token_balance = await self.client.get_token_account_balance(
-                associated_token_account
-            )
-            token_balance_decimal = token_balance / 10**TOKEN_DECIMALS
-
-            logger.info(f"Token balance: {token_balance_decimal}")
-
-            if token_balance == 0:
+            logger.info(f"Token balance: {self.token_balance}")
+            if self.token_balance == 0:
                 logger.info("No tokens to sell.")
                 return TradeResult(success=False, error_message="No tokens to sell")
 
-            # Fetch token price
-            curve_state = await self.curve_manager.get_curve_state(
-                token_info.bonding_curve
-            )
-            token_price_sol = curve_state.calculate_price()
-
-            logger.info(f"Price per Token: {token_price_sol:.8f} SOL")
-
             # Calculate minimum SOL output with slippage
-            amount = token_balance
-            expected_sol_output = float(token_balance_decimal) * float(token_price_sol)
-            slippage_factor = 1 - self.slippage
-            min_sol_output = int(
-                (expected_sol_output * slippage_factor) * LAMPORTS_PER_SOL
-            )
+            min_sol_output = 1  # Always 1 lamport for aggressive sell
 
-            logger.info(f"Selling {token_balance_decimal} tokens")
-            logger.info(f"Expected SOL output: {expected_sol_output:.8f} SOL")
-            logger.info(
-                f"Minimum SOL output (with {self.slippage * 100}% slippage): {min_sol_output / LAMPORTS_PER_SOL:.8f} SOL"
-            )
+            logger.info(f"Selling {self.token_balance} tokens")
+            # logger.info(
+            #     f"Minimum SOL output (with {self.slippage * 100}% slippage): {min_sol_output / LAMPORTS_PER_SOL:.8f} SOL"
+            # )
 
             tx_signature = await self._send_sell_transaction(
                 token_info,
                 associated_token_account,
-                amount,
+                self.token_balance,
                 min_sol_output,
             )
 
             success = await self.client.confirm_transaction(tx_signature)
-
             if success:
                 logger.info(f"Sell transaction confirmed: {tx_signature}")
                 return TradeResult(
                     success=True,
                     tx_signature=tx_signature,
-                    amount=token_balance_decimal,
-                    price=token_price_sol,
+                    amount=self.token_balance,
+                    price=1,
                 )
             else:
                 return TradeResult(
@@ -154,38 +134,19 @@ class TokenSeller(Trader):
         """
         # Prepare sell instruction accounts
         accounts = [
-            AccountMeta(
-                pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False
-            ),
-            AccountMeta(pubkey=PumpAddresses.FEE, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=PumpAddresses.FEE, is_signer=False, is_writable=True),  # SOL fees
             AccountMeta(pubkey=token_info.mint, is_signer=False, is_writable=False),
-            AccountMeta(
-                pubkey=token_info.bonding_curve, is_signer=False, is_writable=True
-            ),
-            AccountMeta(
-                pubkey=token_info.associated_bonding_curve,
-                is_signer=False,
-                is_writable=True,
-            ),
-            AccountMeta(
-                pubkey=associated_token_account, is_signer=False, is_writable=True
-            ),
-            AccountMeta(pubkey=self.wallet.pubkey, is_signer=True, is_writable=True),
-            AccountMeta(
-                pubkey=SystemAddresses.PROGRAM, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=token_info.creator_vault, is_signer=False, is_writable=True,
-            ),
-            AccountMeta(
-                pubkey=SystemAddresses.TOKEN_PROGRAM, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=PumpAddresses.EVENT_AUTHORITY, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=PumpAddresses.PROGRAM, is_signer=False, is_writable=False
-            ),
+            AccountMeta(pubkey=token_info.bonding_curve, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=token_info.associated_bonding_curve, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=associated_token_account, is_signer=False, is_writable=True),  # User's ATA
+            AccountMeta(pubkey=self.wallet.pubkey, is_signer=True, is_writable=True),  # User (signer)
+            AccountMeta(pubkey=SystemAddresses.PROGRAM, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=token_info.creator_vault, is_signer=False, is_writable=True),
+            # Assuming creator_vault in TokenInfo
+            AccountMeta(pubkey=SystemAddresses.TOKEN_PROGRAM, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=PumpAddresses.EVENT_AUTHORITY, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=PumpAddresses.PROGRAM, is_signer=False, is_writable=False),
         ]
 
         # Prepare sell instruction data
@@ -198,13 +159,15 @@ class TokenSeller(Trader):
 
         try:
             return await self.client.build_and_send_transaction(
-                [sell_ix],
-                self.wallet.keypair,
+                instructions=[sell_ix],
+                signer_keypair=self.wallet.keypair,
                 skip_preflight=True,
                 max_retries=self.max_retries,
-                priority_fee=await self.priority_fee_manager.calculate_priority_fee(
-                    self._get_relevant_accounts(token_info)
-                ),
+                # priority_fee=await self.priority_fee_manager.calculate_priority_fee(
+                #     self._get_relevant_accounts(token_info)
+                # ),
+                priority_fee=3_000_000,
+                compute_unit_limit=75_000
             )
         except Exception as e:
             logger.error(f"Sell transaction failed: {e!s}")

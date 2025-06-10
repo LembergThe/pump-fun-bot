@@ -37,11 +37,11 @@ class TokenBuyer(Trader):
         wallet: Wallet,
         curve_manager: BondingCurveManager,
         priority_fee_manager: PriorityFeeManager,
-        amount: float,
+        buy_sol_amount: float,
+        token_amount: int,
         slippage: float = 0.01,
         max_retries: int = 5,
-        extreme_fast_token_amount: int = 0,
-        extreme_fast_mode: bool = False,
+        fixed_fee: int = 3_000_000,
     ):
         """Initialize token buyer.
 
@@ -49,21 +49,20 @@ class TokenBuyer(Trader):
             client: Solana client for RPC calls
             wallet: Wallet for signing transactions
             curve_manager: Bonding curve manager
-            amount: Amount of SOL to spend
+            buy_sol_amount: Amount of SOL to spend
+            token_amount: Amount of tokens to buy
             slippage: Slippage tolerance (0.01 = 1%)
             max_retries: Maximum number of retry attempts
-            extreme_fast_token_amount: Amount of token to buy if extreme fast mode is enabled
-            extreme_fast_mode: If enabled, avoid fetching associated bonding curve state
         """
         self.client = client
         self.wallet = wallet
         self.curve_manager = curve_manager
         self.priority_fee_manager = priority_fee_manager
-        self.amount = amount
+        self.buy_sol_amount = buy_sol_amount
+        self.token_amount = token_amount
         self.slippage = slippage
         self.max_retries = max_retries
-        self.extreme_fast_mode = extreme_fast_mode
-        self.extreme_fast_token_amount = extreme_fast_token_amount
+        self.fixed_fee = fixed_fee
 
     async def execute(self, token_info: TokenInfo, *args, **kwargs) -> TradeResult:
         """Execute buy operation.
@@ -76,19 +75,9 @@ class TokenBuyer(Trader):
         """
         try:
             # Convert amount to lamports
-            amount_lamports = int(self.amount * LAMPORTS_PER_SOL)
+            amount_lamports = int(self.buy_sol_amount * LAMPORTS_PER_SOL)
 
-            if self.extreme_fast_mode:
-                # Skip the wait and directly calculate the amount
-                token_amount = self.extreme_fast_token_amount
-                token_price_sol = self.amount / token_amount
-                #logger.info(f"EXTREME FAST Mode: Buying {token_amount} tokens.")
-            else:
-                # Regular behavior with RPC call
-                curve_state = await self.curve_manager.get_curve_state(token_info.bonding_curve)
-                token_price_sol = curve_state.calculate_price()
-                token_amount = self.amount / token_price_sol
-
+            logger.info(f"EXTREME FAST Mode: Buying {self.token_amount} tokens.")
             # Calculate maximum SOL to spend with slippage
             max_amount_lamports = int(amount_lamports * (1 + self.slippage))
 
@@ -99,15 +88,12 @@ class TokenBuyer(Trader):
             tx_signature = await self._send_buy_transaction(
                 token_info,
                 associated_token_account,
-                token_amount,
+                self.token_amount,
                 max_amount_lamports,
             )
 
             logger.info(
-                f"Buying {token_amount:.6f} tokens at {token_price_sol:.8f} SOL per token"
-            )
-            logger.info(
-                f"Total cost: {self.amount:.6f} SOL (max: {max_amount_lamports / LAMPORTS_PER_SOL:.6f} SOL)"
+                f"Buying {self.token_amount:.6f} tokens at max {self.buy_sol_amount:.8f} SOL"
             )
 
             success = await self.client.confirm_transaction(tx_signature)
@@ -118,7 +104,7 @@ class TokenBuyer(Trader):
                     success=True,
                     tx_signature=tx_signature,
                     amount=token_amount,
-                    price=token_price_sol,
+                    price=1,
                 )
             else:
                 return TradeResult(
@@ -152,46 +138,25 @@ class TokenBuyer(Trader):
             Exception: If transaction fails after all retries
         """
         accounts = [
-            AccountMeta(
-                pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False
-            ),
-            AccountMeta(pubkey=PumpAddresses.FEE, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=PumpAddresses.GLOBAL, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=PumpAddresses.FEE, is_signer=False, is_writable=True),  # SOL fees
             AccountMeta(pubkey=token_info.mint, is_signer=False, is_writable=False),
-            AccountMeta(
-                pubkey=token_info.bonding_curve, is_signer=False, is_writable=True
-            ),
-            AccountMeta(
-                pubkey=token_info.associated_bonding_curve,
-                is_signer=False,
-                is_writable=True,
-            ),
-            AccountMeta(
-                pubkey=associated_token_account, is_signer=False, is_writable=True
-            ),
-            AccountMeta(pubkey=self.wallet.pubkey, is_signer=True, is_writable=True),
-            AccountMeta(
-                pubkey=SystemAddresses.PROGRAM, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=SystemAddresses.TOKEN_PROGRAM, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=token_info.creator_vault, is_signer=False, is_writable=True
-            ),
-            AccountMeta(
-                pubkey=PumpAddresses.EVENT_AUTHORITY, is_signer=False, is_writable=False
-            ),
-            AccountMeta(
-                pubkey=PumpAddresses.PROGRAM, is_signer=False, is_writable=False
-            ),
+            AccountMeta(pubkey=token_info.bonding_curve, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=token_info.associated_bonding_curve, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=associated_token_account, is_signer=False, is_writable=True),  # User's ATA
+            AccountMeta(pubkey=self.wallet.pubkey, is_signer=True, is_writable=True),  # User (signer)
+            AccountMeta(pubkey=SystemAddresses.PROGRAM, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=SystemAddresses.TOKEN_PROGRAM, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=token_info.creator_vault, is_signer=False, is_writable=True),
+            AccountMeta(pubkey=PumpAddresses.EVENT_AUTHORITY, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=PumpAddresses.PROGRAM, is_signer=False, is_writable=False),
         ]
 
         # Prepare idempotent create ATA instruction: it will not fail if ATA already exists
         idempotent_ata_ix = create_idempotent_associated_token_account(
-            self.wallet.pubkey,
-            self.wallet.pubkey,
-            token_info.mint,
-            SystemAddresses.TOKEN_PROGRAM
+            payer=self.wallet.pubkey,
+            owner=self.wallet.pubkey,
+            mint=token_info.mint,
         )
 
         # Prepare buy instruction data
@@ -203,15 +168,21 @@ class TokenBuyer(Trader):
         )
         buy_ix = Instruction(PumpAddresses.PROGRAM, data, accounts)
 
+        logger.info(
+            f"BUYER TX PACKING: token_amount_raw: {token_amount_raw}, "
+            f"max_amount_lamports: {max_amount_lamports}"
+        )
+
         try:
             return await self.client.build_and_send_transaction(
                 [idempotent_ata_ix, buy_ix],
                 self.wallet.keypair,
                 skip_preflight=True,
                 max_retries=self.max_retries,
-                priority_fee=await self.priority_fee_manager.calculate_priority_fee(
-                    self._get_relevant_accounts(token_info)
-                ),
+                # priority_fee=await self.priority_fee_manager.calculate_priority_fee(
+                #     self._get_relevant_accounts(token_info)
+                # ),
+                priority_fee=3_000_000
             )
         except Exception as e:
             logger.error(f"Buy transaction failed: {e!s}")

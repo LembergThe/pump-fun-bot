@@ -5,8 +5,9 @@ import yaml
 from dotenv import load_dotenv
 
 REQUIRED_FIELDS = [
-    "name", "rpc_endpoint", "wss_endpoint", "private_key",
-    "trade.buy_amount", "trade.buy_slippage", "trade.sell_slippage",
+    "name", "rpc_endpoint", "wss_endpoint", "private_key", "zero_slot_endpoint",
+    "trade.buy_amount", "trade.buy_slippage",
+    "trade.token_amount", "trade.sell_slippage",
     "filters.listener_type", "filters.max_token_age"
 ]
 
@@ -14,6 +15,7 @@ CONFIG_VALIDATION_RULES = [
     # (path, type, min_value, max_value, error_message)
     ("trade.buy_amount", (int, float), 0, float('inf'), "trade.buy_amount must be a positive number"),
     ("trade.buy_slippage", float, 0, 1, "trade.buy_slippage must be between 0 and 1"),
+    ("trade.token_amount", int, 0, float("inf"), "trade.token_amount must be between 0 and non-negative integer"),
     ("trade.sell_slippage", float, 0, 1, "trade.sell_slippage must be between 0 and 1"),
     ("priority_fees.fixed_amount", int, 0, float('inf'), "priority_fees.fixed_amount must be a non-negative integer"),
     ("priority_fees.extra_percentage", float, 0, 1, "priority_fees.extra_percentage must be between 0 and 1"),
@@ -57,7 +59,6 @@ def load_bot_config(path: str) -> dict:
     
     resolve_env_vars(config)
     validate_config(config)
-    
     return config
 
 def resolve_env_vars(config: dict) -> None:
@@ -171,7 +172,8 @@ def print_config_summary(config: dict) -> None:
     print("Trade settings:")
     print(f"  - Buy amount: {trade.get('buy_amount', 'not configured')} SOL")
     print(f"  - Buy slippage: {trade.get('buy_slippage', 'not configured') * 100}%")
-    print(f"  - Extreme fast mode: {'enabled' if trade.get('extreme_fast_mode') else 'disabled'}")
+    print(f"  - Buy tokens: {trade.get('token_amount', 'not configured')}")
+    print(f"  - Sell slippage: {trade.get('sell_slippage', 'not configured') * 100}%")
     
     fees = config.get('priority_fees', {})
     print("Priority fees:")
@@ -179,10 +181,18 @@ def print_config_summary(config: dict) -> None:
         print("  - Dynamic fees enabled")
     elif fees.get('enable_fixed'):
         print(f"  - Fixed fee: {fees.get('fixed_amount', 'not configured')} microlamports")
+
+    print(f"transaction_sender settings:")
+    print(f"  - Zero slot RPC: {config.get('zero_slot_endpoint')}")
+    print(f"  - PRIMARY RPC: {config.get('rpc_endpoint')}")
+    print(f"  - WS RPC: {config.get('wss_endpoint')}")
+    print("Filters:")
+    print(f"  - Max token age: {config.get('filters', {}).get('max_token_age', 'not configured')} seconds")
+
     
     print("Configuration loaded successfully!")
 
 
 if __name__ == "__main__":
-    config = load_bot_config("bots/bot-sniper.yaml")
+    config = load_bot_config("bots/bot-sniper-1-geyser.yaml")
     print_config_summary(config)

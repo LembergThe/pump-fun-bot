@@ -16,6 +16,16 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+GRPC_CHANNEL_OPTIONS = [
+    ('grpc.enable_retries', 0),
+    ('grpc.keepalive_time_ms', 15000),
+    ('grpc.keepalive_timeout_ms', 5000),
+    ('grpc.keepalive_permit_without_calls', 1),
+    ('grpc.http2.min_time_between_pings_ms', 15000),
+    ('grpc.http2.max_pings_without_data', 0),
+    # Consider ('grpc.max_receive_message_length', -1) if you expect very large messages, though default is usually fine.
+]
+
 
 class GeyserListener(BaseTokenListener):
     """Geyser listener for pump.fun token creation events."""
@@ -31,38 +41,42 @@ class GeyserListener(BaseTokenListener):
         """
         self.geyser_endpoint = geyser_endpoint
         self.geyser_api_token = geyser_api_token
-        valid_auth_types = {"x-token", "basic"}
-        self.auth_type: str = (geyser_auth_type or "x-token").lower()
-        if self.auth_type not in valid_auth_types:
-            raise ValueError(
-                f"Unsupported auth_type={self.auth_type!r}. "
-                f"Expected one of {valid_auth_types}"
-            )
+        # valid_auth_types = {"x-token", "basic"}
+        # self.auth_type: str = (geyser_auth_type or "x-token").lower()
+        # if self.auth_type not in valid_auth_types:
+        #     raise ValueError(
+        #         f"Unsupported auth_type={self.auth_type!r}. "
+        #         f"Expected one of {valid_auth_types}"
+        #     )
+        # Connection state
+        self.stub = None
+        self.channel = None
+
         self.pump_program = pump_program
         self.event_processor = GeyserEventProcessor(pump_program)
-        
+        logger.info(f"Configuring Geyser for INSECURE channel to {self.geyser_endpoint}.")
+
     async def _create_geyser_connection(self):
         """Establish a secure connection to the Geyser endpoint."""
-        if self.auth_type == "x-token":
-            auth = grpc.metadata_call_credentials(
-                lambda _, callback: callback((("x-token", self.geyser_api_token),), None)
-            )
-        else:  # Default to basic auth
-            auth = grpc.metadata_call_credentials(
-                lambda _, callback: callback((("authorization", f"Basic {self.geyser_api_token}"),), None)
-            )
-        creds = grpc.composite_channel_credentials(
-            grpc.ssl_channel_credentials(), auth
-        )
-        channel = grpc.aio.secure_channel(self.geyser_endpoint, creds)
-        return geyser_pb2_grpc.GeyserStub(channel), channel
+        channel = grpc.aio.insecure_channel(self.geyser_endpoint, options=GRPC_CHANNEL_OPTIONS)
+
+        if not self.channel:  # Should not happen if above logic is correct
+            raise ConnectionError(f"Failed to initialize gRPC channel to {self.geyser_endpoint}.")
+
+        stub = geyser_pb2_grpc.GeyserStub(self.channel)
+        logger.info(f"Geyser gRPC channel and stub initialized (Secure: {False}).")
+        return stub, channel
+
 
     def _create_subscription_request(self):
         """Create a subscription request for Pump.fun transactions."""
         request = geyser_pb2.SubscribeRequest()
         request.transactions["pump_filter"].account_include.append(str(self.pump_program))
-        request.transactions["pump_filter"].failed = False
-        request.commitment = geyser_pb2.CommitmentLevel.PROCESSED
+        request.transactions["pump_filter"].failed = False  # Only successful transactions
+        request.commitment = geyser_pb2.CommitmentLevel.PROCESSED  # Crucial for speed
+        logger.debug(
+            f"Geyser subscription request configured for program {self.pump_program} with commitment {request.commitment}."
+        )
         return request
 
     async def listen_for_tokens(
@@ -78,16 +92,20 @@ class GeyserListener(BaseTokenListener):
             match_string: Optional string to match in token name/symbol
             creator_address: Optional creator address to filter by
         """
+        stub, channel = await self._create_geyser_connection()
+        request = self._create_subscription_request()
+
         while True:
             try:
-                stub, channel = await self._create_geyser_connection()
-                request = self._create_subscription_request()
-                
                 logger.info(f"Connected to Geyser endpoint: {self.geyser_endpoint}")
                 logger.info(f"Monitoring for transactions involving program: {self.pump_program}")
                 
                 try:
                     async for update in stub.Subscribe(iter([request])):
+                        if not update.HasField("transaction"):
+                            if update.HasField("ping"):
+                                logger.debug("Geyser ping received.")
+                            continue
                         token_info = await self._process_update(update)
                         if not token_info:
                             continue
@@ -115,15 +133,27 @@ class GeyserListener(BaseTokenListener):
                             continue
     
                         await token_callback(token_info)
-                        
+                    logger.warning("Geyser Subscribe stream ended unexpectedly. Will attempt to reconnect.")
+
                 except grpc.aio.AioRpcError as e:
-                    logger.error(f"gRPC error: {e.details()}")
+                    logger.error(f"gRPC error during Subscribe: {e.details()} (Code: {e.code()})")
+                    if self.channel:
+                        await self.channel.close()  # Attempt to close gracefully
+                    self.channel = None  # Force re-creation
+                    self.stub = None
+                    if e.code() == grpc.StatusCode.UNAUTHENTICATED:
+                        logger.error("CRITICAL: gRPC UNAUTHENTICATED. Bot may stop if this persists.")
+                        # Consider a different retry strategy or stopping the bot for auth errors.
                     await asyncio.sleep(5)
                     
                 finally:
                     await channel.close()
                     
             except Exception as e:
+                if self.channel:
+                    await self.channel.close()
+                self.channel = None
+                self.stub = None
                 logger.error(f"Geyser connection error: {e}")
                 logger.info("Reconnecting in 10 seconds...")
                 await asyncio.sleep(10)
@@ -138,8 +168,9 @@ class GeyserListener(BaseTokenListener):
             TokenInfo if a token creation is found, None otherwise
         """
         try:
-            if not update.HasField("transaction"):
-                return None
+            # # already checked by caller
+            # if not update.HasField("transaction"):
+            #     return None
                 
             tx = update.transaction.transaction.transaction
             msg = getattr(tx, "message", None)
@@ -155,10 +186,13 @@ class GeyserListener(BaseTokenListener):
                 program_id = msg.account_keys[program_idx]
                 if bytes(program_id) != bytes(self.pump_program):
                     continue
-                
-                # Process instruction data
+
+                # This is the most CPU-intensive part of _process_update typically.
+                # Ensure GeyserEventProcessor is efficient.
                 token_info = self.event_processor.process_transaction_data(
-                    ix.data, ix.accounts, msg.account_keys
+                    ix.data,  # Raw instruction data bytes
+                    ix.accounts,  # List of u8 indices into account_keys_from_msg
+                    msg.account_keys  # Full list of Pubkeys for the transaction
                 )
                 if token_info:
                     return token_info

@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime
 from time import monotonic
+from typing import Optional
 
 import uvloop
 from solders.pubkey import Pubkey
@@ -41,8 +42,10 @@ class PumpTrader:
         self,
         rpc_endpoint: str,
         wss_endpoint: str,
+        zero_slot_endpoint: str,
         private_key: str,
         buy_amount: float,
+        token_amount: int,
         buy_slippage: float,
         sell_slippage: float,
         listener_type: str = "logs",
@@ -50,9 +53,6 @@ class PumpTrader:
         geyser_api_token: str | None = None,
         geyser_auth_type: str = "x-token",
 
-        extreme_fast_mode: bool = False,
-        extreme_fast_token_amount: int = 30,
-        
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
         enable_fixed_priority_fee: bool = True,
@@ -62,10 +62,10 @@ class PumpTrader:
         
         # Retry and timeout settings
         max_retries: int = 3,
-        wait_time_after_creation: int = 15, # here and further - seconds
-        wait_time_after_buy: int = 15,
-        wait_time_before_new_token: int = 15,
-        max_token_age: int | float = 0.001,
+        wait_time_after_creation: int = 0, # here and further - seconds
+        wait_time_after_buy: float = 0.5,
+        wait_time_before_new_token: int = 5,
+        max_token_age: int | float = 0.5,
         token_wait_timeout: int = 30,
         
         # Cleanup settings
@@ -93,9 +93,6 @@ class PumpTrader:
             geyser_api_token: Geyser API token (required for geyser listener)
             geyser_auth_type: Geyser authentication type ('x-token' or 'basic')
 
-            extreme_fast_mode: Whether to enable extreme fast mode
-            extreme_fast_token_amount: Maximum token amount for extreme fast mode
-
             enable_dynamic_priority_fee: Whether to enable dynamic priority fees
             enable_fixed_priority_fee: Whether to enable fixed priority fees
             fixed_priority_fee: Fixed priority fee amount
@@ -118,7 +115,7 @@ class PumpTrader:
             marry_mode: If True, only buy tokens and skip selling
             yolo_mode: If True, trade continuously
         """
-        self.solana_client = SolanaClient(rpc_endpoint)
+        self.solana_client = SolanaClient(rpc_endpoint=rpc_endpoint, zero_slot_endpoint=zero_slot_endpoint)
         self.wallet = Wallet(private_key)
         self.curve_manager = BondingCurveManager(self.solana_client)
         self.priority_fee_manager = PriorityFeeManager(
@@ -130,30 +127,30 @@ class PumpTrader:
             hard_cap=hard_cap_prior_fee,
         )
         self.buyer = TokenBuyer(
-            self.solana_client,
-            self.wallet,
-            self.curve_manager,
-            self.priority_fee_manager,
-            buy_amount,
-            buy_slippage,
-            max_retries,
-            extreme_fast_token_amount,
-            extreme_fast_mode
+            client=self.solana_client,
+            wallet=self.wallet,
+            curve_manager=self.curve_manager,
+            priority_fee_manager=self.priority_fee_manager,
+            buy_sol_amount=buy_amount,
+            token_amount=token_amount,
+            slippage=buy_slippage,
+            max_retries=max_retries,
         )
         self.seller = TokenSeller(
-            self.solana_client,
-            self.wallet,
-            self.curve_manager,
-            self.priority_fee_manager,
-            sell_slippage,
-            max_retries,
+            client=self.solana_client,
+            wallet=self.wallet,
+            curve_manager=self.curve_manager,
+            priority_fee_manager=self.priority_fee_manager,
+            slippage=sell_slippage,
+            max_retries=max_retries,
+            token_balance=token_amount,
         )
         
         # Initialize the appropriate listener type
         listener_type = listener_type.lower()
         if listener_type == "geyser":
             if not geyser_endpoint or not geyser_api_token:
-                raise ValueError("Geyser endpoint and API token are required for geyser listener")
+                logger.warning("Geyser listener selected but endpoint or API token might be missing. Ensure config is correct if auth is needed.")
                 
             self.token_listener = GeyserListener(
                 geyser_endpoint, 
@@ -174,9 +171,7 @@ class PumpTrader:
         self.buy_slippage = buy_slippage
         self.sell_slippage = sell_slippage
         self.max_retries = max_retries
-        self.extreme_fast_mode = extreme_fast_mode
-        self.extreme_fast_token_amount = extreme_fast_token_amount
-        
+
         # Timing parameters
         self.wait_time_after_creation = wait_time_after_creation
         self.wait_time_after_buy = wait_time_after_buy
@@ -213,7 +208,10 @@ class PumpTrader:
 
         try:
             health_resp = await self.solana_client.get_health()
-            logger.info(f"RPC warm-up successful (getHealth passed: {health_resp})")
+            if not health_resp:
+                logger.warning(f"RPC warm-up failed")
+            else:
+                logger.info(f"RPC warm-up successful (getHealth passed: {health_resp})")
         except Exception as e:
             logger.warning(f"RPC warm-up failed: {e!s}")
 
@@ -237,7 +235,7 @@ class PumpTrader:
 
                 try:
                     await self.token_listener.listen_for_tokens(
-                        lambda token: self._queue_token(token),
+                        self._queue_token,
                         self.match_string,
                         self.bro_address,
                     )
@@ -265,7 +263,7 @@ class PumpTrader:
         """
         # Create a one-time event to signal when a token is found
         token_found = asyncio.Event()
-        found_token = None
+        found_token: Optional[TokenInfo] = None
         
         async def token_callback(token: TokenInfo) -> None:
             nonlocal found_token
@@ -390,15 +388,6 @@ class PumpTrader:
             token_info: Token information
         """
         try:
-            # Wait for bonding curve to stabilize (unless in extreme fast mode)
-            if not self.extreme_fast_mode:
-                # Save token info to file
-                # await self._save_token_info(token_info)
-                logger.info(
-                    f"Waiting for {self.wait_time_after_creation} seconds for the bonding curve to stabilize..."
-                )
-                await asyncio.sleep(self.wait_time_after_creation)
-
             # Buy token
             logger.info(
                 f"Buying {self.buy_amount:.6f} SOL worth of {token_info.symbol}..."

@@ -6,29 +6,27 @@ name: "bot-sniper-1"
 env_file: ".env"
 rpc_endpoint: "${SOLANA_NODE_RPC_ENDPOINT}"
 wss_endpoint: "${SOLANA_NODE_WSS_ENDPOINT}"
+zero_slot_endpoint: "${ZERO_SLOT_RPC_ENDPOINT}"
 private_key: "${SOLANA_PRIVATE_KEY}"
 
-enabled: false # You can turn off the bot w/o removing its config
+enabled: true # You can turn off the bot w/o removing its config
 separate_process: true
 
 # Geyser configuration (fastest method for getting updates)
 geyser:
-  endpoint: "${GEYSER_ENDPOINT}"
-  api_token: "${GEYSER_API_TOKEN}"
-  auth_type: "x-token" # or "basic"
+  endpoint: "${GEYSER_ENDPOINT}"    # e.g., "newyork.omeganetworks.io:10000"
+  # Since no auth token is used, set these to YAML 'null' (which becomes Python 'None'>
+  # Ensure GEYSER_API_TOKEN in your .env file is empty or commented out.
+  api_token: null
+  auth_type: null
 
 # Trading parameters
 # Control trade execution: amount of SOL per trade and acceptable price deviation
 trade:
-  buy_amount: 0.0001 # Amount of SOL to spend when buying (in SOL)
-  buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
-  sell_slippage: 0.3
-
-  # EXTREME FAST mode configuration
-  # When enabled, skips waiting for the bonding curve to stabilize and RPC price check.
-  # The bot buys the specified number of tokens directly, making the process faster but less precise.
-  extreme_fast_mode: true
-  extreme_fast_token_amount: 20 # Amount of tokens to buy
+  buy_amount: 0.05 # (not used currently) Amount of SOL to spend per buy
+  token_amount: 777 # Target decimal amount of tokens to buy
+  buy_slippage: 0.3  # Max acceptable price deviation for buys (0.3 = 30%)
+  sell_slippage: 0.3 # Max acceptable price deviation for sells (0.3 = 30%)
 
 # Priority fee configuration
 # Manage transaction speed and cost on the Solana network.
@@ -36,37 +34,35 @@ trade:
 priority_fees:
   enable_dynamic: false # Use latest transactions to estimate required fee (getRecentPrioritizationFees)
   enable_fixed: true # Use fixed amount below
-  fixed_amount: 1_000_000 # Base fee in microlamports
+  fixed_amount: 3_000_000 # Base fee in microlamports
   extra_percentage: 0.0 # Percentage increase on riority fee regardless of the calculation method (0.1 = 10%)
-  hard_cap: 1_000_000 # Maximum allowable fee in microlamports to prevent excessive spending
+  hard_cap: 50_000_000 # Maximum allowable fee in microlamports to prevent excessive spending
 
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol
-  bro_address: null # Only trade tokens created by this user address
+  bro_address: BwaVFCDJ4HfRfFWq1S23LHkk5VF4GKEw9oz7F1PxgcHv # Only trade tokens created by this user address
   listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
   max_token_age: 0.001 # Maximum token age in seconds for processing
   marry_mode: false # Only buy tokens, skip selling
-  yolo_mode: false # Continuously trade tokens
+  yolo_mode: true # Continuously trade tokens
 
 # Retry and timeout settings
 retries:
-  max_attempts: 1 # Number of attempts for transaction submission
-  wait_after_creation: 15 # Seconds to wait after token creation (only if EXTREME FAST is disabled)
-  wait_after_buy: 15 # Holding period after buy transaction
-  wait_before_new_token: 15 # Pause between token trades
+  max_attempts: 3         # Max send attempts for SolanaClient (0 means 1 try, 1 means>
+  seller_max_retries_aggressive: 1 # Max send attempts specifically for aggressive sel>
+  wait_after_creation: 0  # Seconds to wait after token creation log before attempting>
+  wait_after_buy: 1     # Seconds to hold token after buy before attempting sell
+  wait_before_new_token: 660 # Seconds to pause between trades if yolo_mode is true (was 96, reduced for faster testing)
 
 # Token and account management
 cleanup:
-  # Cleanup mode determines when to manage token accounts. Options:
-  # "disabled": no cleanup will occur.
-  # "on_fail": only clean up if a buy transaction fails.
-  # "after_sell": clean up after selling.
-  # "post_session": clean up all empty accounts after a trading session ends.
-  mode: "post_session"
-  force_close_with_burn: false # Force burning remaining tokens before closing account
-  with_priority_fee: false # Use priority fees for cleanup transactions
+  mode: "post_session" # Options: "disabled", "on_fail", "after_sell", "post_session"
+  force_close_with_burn: false # If true, tries to burn remaining tokens when closing ATAs
+  with_priority_fee: false     # Whether to use priority fees for cleanup transactions
 
-# Node provider configuration (not implemented)
-node:
-  max_rps: 25 # Maximum requests per second
+# Timing settings
+timing:
+  token_wait_timeout: 0 # Seconds to wait for a new token if yolo_mode is false
+
+debug_mode: false # Set to true for more verbose logging, including potentially sensitive data

@@ -38,45 +38,43 @@ async def start_bot(config_path: str):
     cfg = load_bot_config(config_path)
     setup_logging(cfg["name"])
     print_config_summary(cfg)
-    
+
     trader = PumpTrader(
         # Connection settings
         rpc_endpoint=cfg["rpc_endpoint"],
         wss_endpoint=cfg["wss_endpoint"],
+        zero_slot_endpoint=cfg["zero_slot_endpoint"],
         private_key=cfg["private_key"],
-        
+
         # Trade parameters
         buy_amount=cfg["trade"]["buy_amount"],
+        token_amount=cfg["trade"]["token_amount"],
         buy_slippage=cfg["trade"]["buy_slippage"],
         sell_slippage=cfg["trade"]["sell_slippage"],
-        
-        # Extreme fast mode settings
-        extreme_fast_mode=cfg["trade"].get("extreme_fast_mode", False),
-        extreme_fast_token_amount=cfg["trade"].get("extreme_fast_token_amount", 30),
-        
+
         # Listener configuration
         listener_type=cfg["filters"]["listener_type"],
-        
+
         # Geyser configuration (if applicable)
         geyser_endpoint=cfg.get("geyser", {}).get("endpoint"),
         geyser_api_token=cfg.get("geyser", {}).get("api_token"),
-        geyser_auth_type=cfg.get("geyser", {}).get("auth_type"),
-        
+        geyser_auth_type=cfg.get("geyser", {}).get("auth_type", "x-token"),
+
         # Priority fee configuration
         enable_dynamic_priority_fee=cfg.get("priority_fees", {}).get("enable_dynamic", False),
         enable_fixed_priority_fee=cfg.get("priority_fees", {}).get("enable_fixed", True),
         fixed_priority_fee=cfg.get("priority_fees", {}).get("fixed_amount", 500000),
         extra_priority_fee=cfg.get("priority_fees", {}).get("extra_percentage", 0.0),
         hard_cap_prior_fee=cfg.get("priority_fees", {}).get("hard_cap", 500000),
-        
+
         # Retry and timeout settings
         max_retries=cfg.get("retries", {}).get("max_attempts", 10),
         wait_time_after_creation=cfg.get("retries", {}).get("wait_after_creation", 15),
-        wait_time_after_buy=cfg.get("retries", {}).get("wait_after_buy", 15),
+        wait_time_after_buy=cfg.get("retries", {}).get("wait_after_buy", 1),
         wait_time_before_new_token=cfg.get("retries", {}).get("wait_before_new_token", 15),
         max_token_age=cfg.get("timing", {}).get("max_token_age", 0.001),
         token_wait_timeout=cfg.get("timing", {}).get("token_wait_timeout", 30),
-        
+
         # Cleanup settings
         cleanup_mode=cfg.get("cleanup", {}).get("mode", "disabled"),
         cleanup_force_close_with_burn=cfg.get("cleanup", {}).get("force_close_with_burn", False),
@@ -102,7 +100,7 @@ def run_all_bots():
         logging.error(f"Bot directory '{bot_dir}' not found")
         return
     
-    bot_files = list(bot_dir.glob("*.yaml"))
+    bot_files = list(bot_dir.glob("bot-sniper-1-geyser.yaml"))
     if not bot_files:
         logging.error(f"No bot configuration files found in '{bot_dir}'")
         return
@@ -126,7 +124,7 @@ def run_all_bots():
             if cfg.get("separate_process", False):
                 logging.info(f"Starting bot '{bot_name}' in separate process")
                 p = multiprocessing.Process(
-                    target=lambda path=str(file): asyncio.run(start_bot(path)), 
+                    target=asyncio.run(start_bot(str(file))),
                     name=f"bot-{bot_name}"
                 )
                 p.start()
