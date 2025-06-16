@@ -44,11 +44,16 @@ priority_fees:
 # Filters for token selection
 filters:
   match_string: null # Only process tokens with this string in name/symbol
-  bro_address: BwaVFCDJ4HfRfFWq1S23LHkk5VF4GKEw9oz7F1PxgcHv # Only trade tokens created by this user address
+  bro_address: null # Only trade tokens created by this user address
   listener_type: "geyser" # Method for detecting new tokens: "logs", "blocks", or "geyser"
   max_token_age: 0.001 # Maximum token age in seconds for processing
   marry_mode: false # Only buy tokens, skip selling
   yolo_mode: true # Continuously trade tokens
+
+  min_dev_initial_buy_sol: 1.4
+  max_dev_initial_buy_sol: 3.2
+  max_sol_cost_realization_factor: 1.0
+  token_onchain_time_max: 25
 
 # Retry and timeout settings
 retries:

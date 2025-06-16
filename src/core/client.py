@@ -5,12 +5,13 @@ Solana client abstraction for blockchain operations.
 import asyncio
 import json
 from typing import Any, Optional
-from cachetools import TTLCache, cachedmethod
+from aiocache import cached, Cache
 
 import aiohttp
 from solana.rpc.async_api import AsyncClient
-from solana.rpc.commitment import Processed
+from solana.rpc.commitment import Processed, Commitment
 from solana.rpc.types import TxOpts
+
 from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
 from solders.hash import Hash
 from solders.instruction import Instruction
@@ -18,6 +19,7 @@ from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.solders import RECENT_BLOCKHASHES
+from solders.signature import Signature
 from solders.transaction import VersionedTransaction
 from solders.system_program import TransferParams, transfer as system_transfer
 
@@ -44,7 +46,6 @@ class SolanaClient:
         self._cached_blockhash: Hash | None = None
         self._blockhash_lock = asyncio.Lock()
         self._blockhash_updater_task = asyncio.create_task(self.start_blockhash_updater())
-        self.RECENT_BLOCKHASH_CACHE = TTLCache(maxsize=1, ttl=90)
 
     async def start_blockhash_updater(self, interval: float = 5.0):
         """Start background task to update recent blockhash."""
@@ -58,7 +59,7 @@ class SolanaClient:
             finally:
                 await asyncio.sleep(interval)
 
-    @cachedmethod(cache=lambda self: self.RECENT_BLOCKHASH_CACHE)
+    @cached(ttl=90, cache=Cache.MEMORY)
     async def get_cached_blockhash(self) -> Hash:
         """Return the most recently cached blockhash."""
         async with self._blockhash_lock:
@@ -193,7 +194,7 @@ class SolanaClient:
         )
         final_ordered_instructions.append(tip_instruction)
         # 3. Main transaction instructions
-        final_ordered_instructions.append(instructions)
+        final_ordered_instructions.extend(instructions)
 
         recent_blockhash = await self.get_cached_blockhash()
         message = Message.new_with_blockhash(
@@ -227,7 +228,7 @@ class SolanaClient:
                 await asyncio.sleep(wait_time)
 
     async def confirm_transaction(
-        self, signature: str, commitment: str = "confirmed"
+        self, signature: str, commitment: Commitment = Processed
     ) -> bool:
         """Wait for transaction confirmation.
 
@@ -240,7 +241,7 @@ class SolanaClient:
         """
         client = await self.get_client()
         try:
-            await client.confirm_transaction(signature, commitment=commitment, sleep_seconds=1)
+            await client.confirm_transaction(Signature.from_string(signature), commitment=commitment, sleep_seconds=1)
             return True
         except Exception as e:
             logger.error(f"Failed to confirm transaction {signature}: {e!s}")

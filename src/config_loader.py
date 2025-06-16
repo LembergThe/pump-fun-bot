@@ -8,7 +8,11 @@ REQUIRED_FIELDS = [
     "name", "rpc_endpoint", "wss_endpoint", "private_key", "zero_slot_endpoint",
     "trade.buy_amount", "trade.buy_slippage",
     "trade.token_amount", "trade.sell_slippage",
-    "filters.listener_type", "filters.max_token_age"
+    "filters.listener_type",
+    "filters.max_token_age",
+    "filters.min_buy_tx_count_filter",
+    "filters.min_buy_volume_sol_filter",
+    "filters.max_sol_cost_realization_factor",
 ]
 
 CONFIG_VALIDATION_RULES = [
@@ -17,11 +21,24 @@ CONFIG_VALIDATION_RULES = [
     ("trade.buy_slippage", float, 0, 1, "trade.buy_slippage must be between 0 and 1"),
     ("trade.token_amount", int, 0, float("inf"), "trade.token_amount must be between 0 and non-negative integer"),
     ("trade.sell_slippage", float, 0, 1, "trade.sell_slippage must be between 0 and 1"),
+
     ("priority_fees.fixed_amount", int, 0, float('inf'), "priority_fees.fixed_amount must be a non-negative integer"),
     ("priority_fees.extra_percentage", float, 0, 1, "priority_fees.extra_percentage must be between 0 and 1"),
     ("priority_fees.hard_cap", int, 0, float('inf'), "priority_fees.hard_cap must be a non-negative integer"),
+
     ("retries.max_attempts", int, 0, 100, "retries.max_attempts must be between 0 and 100"),
-    ("filters.max_token_age", (int, float), 0, float('inf'), "filters.max_token_age must be a non-negative number")
+
+    ("filters.max_token_age", (int, float), 0, float('inf'), "filters.max_token_age must be a non-negative number"),
+
+    ("filters.max_token_age", (int, float), 0, float('inf'), "must be a non-negative number"),
+    ("filters.min_buy_tx_count_filter", int, 0, float('inf'), "must be a non-negative integer"),
+    ("filters.min_buy_volume_sol_filter", (int, float), 0, float('inf'), "must be a non-negative number"),
+    ("filters.max_sol_cost_realization_factor", float, 0.0, 1.0, "must be between 0.0 and 1.0"),
+
+    # --- NEW: Developer Buy Filter Validation Rules ---
+    ("filters.min_dev_initial_buy_sol", (int, float), 0.0, float('inf'), "must be a non-negative number if specified"),
+    ("filters.max_dev_initial_buy_sol", (int, float), 0.0, float('inf'), "must be a non-negative number if specified"),
+
 ]
 
 # Valid values for enum-like fields

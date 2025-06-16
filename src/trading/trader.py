@@ -161,10 +161,9 @@ class PumpTrader:
                 logger.warning("Geyser listener selected but endpoint or API token might be missing. Ensure config is correct if auth is needed.")
                 
             self.token_listener = GeyserListener(
-                geyser_endpoint, 
-                geyser_api_token,
-                geyser_auth_type, 
-                PumpAddresses.PROGRAM
+                geyser_endpoint=geyser_endpoint,
+                geyser_api_token=geyser_api_token,
+                pump_program=PumpAddresses.PROGRAM
             )
             logger.info("Using Geyser listener for token monitoring")
         elif listener_type == "logs":
@@ -255,9 +254,9 @@ class PumpTrader:
 
                 try:
                     await self.token_listener.listen_for_tokens(
-                        self._queue_token,
-                        self.match_string,
-                        self.bro_address,
+                        token_callback=self._queue_token,
+                        match_string=self.match_string,
+                        creator_address=self.bro_address,
                     )
                 except Exception as e:
                     logger.error(f"Token listening stopped due to error: {e!s}")
